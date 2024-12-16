@@ -1,0 +1,14 @@
+docx
+python-docx
+tkinter
+phonenumbers
+validate-email-address
+docx2pdf
+comtypes
+pypiwin32
+pywebio
+PyPDF2
+oauth2client
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
