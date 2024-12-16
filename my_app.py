@@ -2,9 +2,15 @@ import os
 import json
 import re
 import phonenumbers
+import subprocess
+import time
+from tkinter import Tk, Label, Entry, Button, Text, filedialog, messagebox, StringVar, OptionMenu
 from validate_email import validate_email
 from docx import Document
 from docx.shared import Inches
+from docx2pdf import convert
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
 
 # ------------------ Utility Functions ------------------
 
@@ -15,138 +21,134 @@ def validate_email_address(email):
 def validate_phone_number(phone):
     """Validate phone number using the phonenumbers library."""
     try:
-        phone_number = phonenumbers.parse(phone, "KE")  # KE for Kenya or replace with your country
+        phone_number = phonenumbers.parse(phone, "KE")
         return phonenumbers.is_valid_number(phone_number)
     except phonenumbers.NumberParseException:
         return False
 
-def get_input_with_validation(prompt, validation_fn, error_message):
-    """Reusable input function with validation."""
-    while True:
-        value = input(prompt).strip()
-        if validation_fn(value):
-            return value
-        print(error_message)
+def generate_unique_filename(base_name="cv"):
+    """Generate a unique filename using a timestamp."""
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    return f"{base_name}_{timestamp}.docx"
 
-def load_data_from_json():
-    """Load data from a JSON file."""
-    file_name = input("Enter the JSON file path (or press Enter to skip): ").strip()
-    if file_name and os.path.exists(file_name):
-        try:
-            with open(file_name, "r") as file:
-                data = json.load(file)
-                print("Data loaded successfully!")
-                return data
-        except json.JSONDecodeError:
-            print("Invalid JSON format. Please try again.")
-    return None
+def save_document_as_pdf(docx_filename):
+    pdf_filename = docx_filename.replace(".docx", ".pdf")
+    subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", docx_filename], check=True)
+    print(f"PDF saved as {pdf_filename}")
+    return pdf_filename
 
-# ------------------ CV Sections ------------------
 
-def add_profile_picture(document, image_path):
-    """Add a profile picture to the document."""
-    if os.path.exists(image_path):
-        document.add_picture(image_path, width=Inches(2.0))
-    else:
-        print(f"Warning: Profile picture '{image_path}' not found. Skipping.")
+def upload_to_google_drive(file_path):
+    """Upload a file to Google Drive."""
+    try:
+        gauth = GoogleAuth()
+        gauth.LocalWebserverAuth()  # Authenticate the user
+        drive = GoogleDrive(gauth)
 
-def get_contact_details(data=None):
-    """Get validated contact details."""
-    print("\n--- Contact Information ---")
-    if data:
-        name = data.get("name", "")
-        phone_number = data.get("phone_number", "")
-        email = data.get("email", "")
-    else:
-        name = input("What is your name? ").strip()
-        phone_number = get_input_with_validation(
-            "Enter your phone number: ", validate_phone_number, "Invalid phone number format. Try again."
-        )
-        email = get_input_with_validation(
-            "Enter your email: ", validate_email_address, "Invalid email format. Try again."
-        )
-    return name, phone_number, email
+        file = drive.CreateFile({'title': os.path.basename(file_path)})
+        file.SetContentFile(file_path)
+        file.Upload()
+        print(f"File uploaded successfully to Google Drive: {file['title']}")
+        return True
+    except Exception as e:
+        print(f"Error uploading to Google Drive: {e}")
+        return False
 
-def add_about_me(document, data=None):
-    """Add the 'About Me' section."""
-    print("\n--- About Me Section ---")
-    document.add_heading("About Me", level=1)
-    about_me = data.get("about_me", "") if data else input("Tell me about yourself: ").strip()
-    if about_me:
+# ------------------ GUI Application ------------------
+class CVGeneratorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("CV Generator")
+        self.root.geometry("600x600")
+
+        # Variables
+        self.name_var = StringVar()
+        self.phone_var = StringVar()
+        self.email_var = StringVar()
+        self.about_me_var = StringVar()
+        self.template_var = StringVar(value="Template 1")
+
+        # Widgets
+        Label(root, text="CV Generator", font=("Arial", 20)).pack(pady=10)
+        
+        Label(root, text="Name:").pack()
+        Entry(root, textvariable=self.name_var).pack()
+
+        Label(root, text="Phone Number:").pack()
+        Entry(root, textvariable=self.phone_var).pack()
+
+        Label(root, text="Email:").pack()
+        Entry(root, textvariable=self.email_var).pack()
+
+        Label(root, text="About Me:").pack()
+        self.about_me_text = Text(root, height=5, width=50)
+        self.about_me_text.pack()
+
+        Label(root, text="Choose Template:").pack()
+        templates = ["Template 1", "Template 2", "Template 3"]
+        OptionMenu(root, self.template_var, *templates).pack()
+
+        Button(root, text="Generate CV", command=self.generate_cv).pack(pady=10)
+        Button(root, text="Upload to Google Drive", command=self.upload_cv_to_drive).pack(pady=10)
+
+        self.status_label = Label(root, text="", fg="green")
+        self.status_label.pack(pady=10)
+
+    def generate_cv(self):
+        """Generate the CV based on user input and chosen template."""
+        name = self.name_var.get().strip()
+        phone = self.phone_var.get().strip()
+        email = self.email_var.get().strip()
+        about_me = self.about_me_text.get("1.0", "end").strip()
+        template = self.template_var.get()
+
+        if not name or not validate_phone_number(phone) or not validate_email_address(email):
+            messagebox.showerror("Error", "Please enter valid Name, Phone, and Email.")
+            return
+
+        # Create document
+        document = Document()
+        document.add_heading(name, level=1)
+        document.add_paragraph(f"Phone: {phone} | Email: {email}")
+        document.add_heading("About Me", level=2)
         document.add_paragraph(about_me)
 
-def add_work_experience(document, data=None):
-    """Add work experiences."""
-    print("\n--- Work Experience ---")
-    experiences = data.get("work_experience", []) if data else []
-    while True:
-        if not data:
-            company = input("Enter company name (or 'done' to skip): ").strip()
-            if company.lower() == "done":
-                break
-            from_date = input("From Date: ").strip()
-            to_date = input("To Date: ").strip()
-            description = input(f"Describe your experience at {company}: ").strip()
-            experiences.append({"company": company, "from_date": from_date, "to_date": to_date, "description": description})
+        # Add template-specific formatting
+        if template == "Template 1":
+            document.add_heading("Work Experience", level=2)
+            document.add_paragraph("- Company ABC (2020-2023): Software Engineer")
+        elif template == "Template 2":
+            document.add_heading("Skills", level=2)
+            document.add_paragraph("- Python, Java, Spring Boot")
+        elif template == "Template 3":
+            document.add_heading("Education", level=2)
+            document.add_paragraph("- BSc Computer Science, XYZ University")
+
+        # Save document
+        filename = generate_unique_filename()
+        document.save(filename)
+        self.docx_filename = filename
+        self.status_label.config(text=f"CV saved as {filename}")
+        messagebox.showinfo("Success", f"CV generated successfully: {filename}")
+
+        # Optionally convert to PDF
+        save_as_pdf = messagebox.askyesno("Export", "Do you want to export the CV as a PDF?")
+        if save_as_pdf:
+            self.pdf_filename = save_document_as_pdf(filename)
+
+    def upload_cv_to_drive(self):
+        """Upload the generated CV to Google Drive."""
+        if hasattr(self, 'pdf_filename') and os.path.exists(self.pdf_filename):
+            success = upload_to_google_drive(self.pdf_filename)
+            if success:
+                messagebox.showinfo("Success", "CV uploaded to Google Drive successfully!")
+            else:
+                messagebox.showerror("Error", "Failed to upload CV to Google Drive.")
         else:
-            break  # JSON data already has work experience
-
-    for exp in experiences:
-        p = document.add_paragraph()
-        p.add_run(exp['company'] + " ").bold = True
-        p.add_run(f"{exp['from_date']} - {exp['to_date']}\n").italic = True
-        p.add_run(exp['description'])
-
-def add_skills(document, data=None):
-    """Add skills."""
-    print("\n--- Skills Section ---")
-    document.add_heading("Skills", level=1)
-    skills = data.get("skills", []) if data else []
-    while not data:
-        skill = input("Enter a skill (or 'done' to finish): ").strip()
-        if skill.lower() == "done":
-            break
-        skills.append(skill)
-
-    for skill in skills:
-        document.add_paragraph(skill, style="List Bullet")
-
-def save_document(document):
-    """Save the document with a custom name."""
-    filename = input("\nEnter the output file name (e.g., my_cv.docx): ").strip()
-    if not filename.endswith(".docx"):
-        filename += ".docx"
-    document.save(filename)
-    print(f"CV successfully saved as '{filename}'!")
+            messagebox.showerror("Error", "No PDF file found. Please generate a CV first.")
 
 # ------------------ Main Function ------------------
-
-def main():
-    print("Welcome to the Enhanced CV Generator!")
-    document = Document()
-
-    # Option to load data from JSON
-    data = load_data_from_json()
-
-    # Add profile picture
-    image_path = "pexels-rachel-claire-5490276.jpg"
-    add_profile_picture(document, image_path)
-
-    # Add Contact Details
-    name, phone_number, email = get_contact_details(data)
-    document.add_paragraph(f"{name} | {phone_number} | {email}")
-
-    # Add About Me
-    add_about_me(document, data)
-
-    # Add Work Experience
-    add_work_experience(document, data)
-
-    # Add Skills
-    add_skills(document, data)
-
-    # Save the document
-    save_document(document)
-
 if __name__ == "__main__":
-    main()
+    root = Tk()
+    app = CVGeneratorApp(root)
+    root.mainloop()
